@@ -1,74 +1,82 @@
-"""High-level runner that wires together config, retry, and alerting."""
+"""High-level job runner — orchestrates config, retry, alerting, and history."""
+
+from __future__ import annotations
 
 import logging
 import sys
-from typing import Optional
+from datetime import datetime, timezone
 
 from cronwrap.config import JobConfig
 from cronwrap.executor import ExecutionResult
+from cronwrap.history import RunRecord, append_record
+from cronwrap.notifications import dispatch_alert
 from cronwrap.retry import run_with_retry
 
-logger = logging.getLogger(__name__)
 
-
-def _setup_logging(config: JobConfig) -> None:
-    handlers = [logging.StreamHandler(sys.stdout)]
-    if config.log_file:
-        handlers.append(logging.FileHandler(config.log_file))
+def _setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        level=getattr(logging, config.log_level.upper()),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=handlers,
+        stream=sys.stdout,
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
 
-def _maybe_alert(config: JobConfig, result: ExecutionResult) -> None:
-    """Placeholder alerting hook — replace with real email/webhook logic."""
-    should_alert = (not result.success and config.alert_on_failure) or (
-        result.success and config.alert_on_success
-    )
-    if not should_alert or not config.alert_emails:
+def _maybe_alert(cfg: JobConfig, result: ExecutionResult, attempts: int) -> None:
+    """Send an alert when the job failed and alerting is configured."""
+    if result.success:
         return
+    if cfg.alert is None:
+        return
+    dispatch_alert(cfg, result, attempts)
 
-    status = "SUCCEEDED" if result.success else "FAILED"
-    logger.info(
-        "[ALERT] Job '%s' %s (exit=%d). Would notify: %s",
-        config.name,
-        status,
-        result.exit_code,
-        ", ".join(config.alert_emails),
+
+def _build_record(
+    cfg: JobConfig,
+    result: ExecutionResult,
+    started_at: str,
+    finished_at: str,
+    attempts: int,
+) -> RunRecord:
+    return RunRecord(
+        job_name=cfg.name,
+        command=cfg.command,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=result.exit_code if result.exit_code is not None else -1,
+        duration_seconds=result.duration_seconds,
+        attempts=attempts,
+        timed_out=result.timed_out,
+        success=result.success,
     )
 
 
-def run_job(config: JobConfig) -> ExecutionResult:
-    """
-    Execute a cron job according to the provided JobConfig.
+def run_job(cfg: JobConfig, verbose: bool = False) -> ExecutionResult:
+    """Execute the job described by *cfg*, record history, and alert on failure."""
+    _setup_logging(verbose)
+    log = logging.getLogger(__name__)
 
-    Returns the final ExecutionResult.
-    """
-    config.validate()
-    _setup_logging(config)
+    log.info("Starting job '%s': %s", cfg.name, cfg.command)
+    started_at = datetime.now(timezone.utc).isoformat()
 
-    logger.info("Starting job '%s': %s", config.name, config.command)
+    result, attempts = run_with_retry(cfg)
 
-    result = run_with_retry(
-        command=config.command,
-        retries=config.retries,
-        delay=config.retry_delay,
-        backoff=config.retry_backoff,
-        timeout=config.timeout,
-        on_retry=lambda r: logger.warning(
-            "Attempt %d failed (exit=%d): %s", r.attempt, r.exit_code, r.stderr
-        ),
+    finished_at = datetime.now(timezone.utc).isoformat()
+
+    status = "succeeded" if result.success else ("timed out" if result.timed_out else "failed")
+    log.info(
+        "Job '%s' %s after %d attempt(s) in %.2fs (exit_code=%s)",
+        cfg.name, status, attempts, result.duration_seconds, result.exit_code,
     )
+    if result.stdout:
+        log.debug("stdout:\n%s", result.stdout)
+    if result.stderr:
+        log.debug("stderr:\n%s", result.stderr)
 
-    _maybe_alert(config, result)
+    record = _build_record(cfg, result, started_at, finished_at, attempts)
+    append_record(record)
 
-    logger.info(
-        "Job '%s' finished — success=%s, attempts=%d, duration=%.3fs",
-        config.name,
-        result.success,
-        result.attempt,
-        result.duration_seconds,
-    )
+    _maybe_alert(cfg, result, attempts)
+
     return result
