@@ -44,3 +44,11 @@ class JobConfig:
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if self.log_level.upper() not in valid_levels:
             raise ValueError(f"log_level must be one of {valid_levels}")
+        if self.alert_emails and not self.alert_on_failure and not self.alert_on_success:
+            raise ValueError(
+                "alert_emails is set but both alert_on_failure and alert_on_success are False"
+            )
+
+    def effective_log_level(self) -> str:
+        """Return the normalised (uppercase) log level string."""
+        return self.log_level.upper()
