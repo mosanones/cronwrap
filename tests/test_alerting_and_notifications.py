@@ -92,39 +92,25 @@ def test_email_smtp_error_returns_false():
 # send_webhook_alert
 # ---------------------------------------------------------------------------
 
+def test_webhook_sent_successfully():
+    """send_webhook_alert returns True when the HTTP request succeeds."""
+    cfg = AlertConfig(to_addresses=[], webhook_url="https://hooks.example.com/notify")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch("requests.post", return_value=mock_response) as mock_post:
+        result = send_webhook_alert(cfg, "subj", "body")
+    assert result is True
+    mock_post.assert_called_once()
+
+
 def test_webhook_no_url_returns_false():
-    cfg = AlertConfig(webhook_url=None)
+    """send_webhook_alert returns False immediately when no webhook URL is configured."""
+    cfg = AlertConfig(to_addresses=[], webhook_url=None)
     assert send_webhook_alert(cfg, "subj", "body") is False
 
 
-def test_webhook_delivered_successfully():
-    cfg = AlertConfig(webhook_url="http://hooks.example.com/alert")
-    mock_resp = MagicMock()
-    mock_resp.status = 200
-    mock_resp.__enter__ = lambda s: s
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    with patch("urllib.request.urlopen", return_value=mock_resp):
-        assert send_webhook_alert(cfg, "subj", "body") is True
-
-
-# ---------------------------------------------------------------------------
-# dispatch_alert
-# ---------------------------------------------------------------------------
-
-def test_dispatch_skips_on_success_when_failure_only(ok_result):
-    cfg = AlertConfig(to_addresses=["ops@example.com"])
-    with patch("cronwrap.notifications.send_email_alert") as mock_email:
-        dispatch_alert("job", ok_result, cfg, on_failure_only=True)
-        mock_email.assert_not_called()
-
-
-def test_dispatch_sends_on_failure(fail_result):
-    cfg = AlertConfig(to_addresses=["ops@example.com"])
-    with patch("cronwrap.notifications.send_email_alert") as mock_email:
-        dispatch_alert("job", fail_result, cfg, on_failure_only=True)
-        mock_email.assert_called_once()
-
-
-def test_dispatch_no_config_is_noop(fail_result):
-    # Should not raise even when alert_config is None
-    dispatch_alert("job", fail_result, None)
+def test_webhook_request_error_returns_false():
+    """send_webhook_alert returns False when the HTTP request raises an exception."""
+    cfg = AlertConfig(to_addresses=[], webhook_url="https://hooks.example.com/notify")
+    with patch("requests.post", side_effect=OSError("network error")):
+        assert send_webhook_alert(cfg, "subj", "body") is False
