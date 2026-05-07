@@ -32,3 +32,14 @@ def render_search_results(jobs: List[str], key: str, value: Optional[str]) -> st
         return f"No jobs matched label '{query}'."
     header = f"Jobs with label '{query}':"
     return "\n".join([header] + [f"  - {j}" for j in jobs])
+
+
+def render_label_keys(index: LabelIndex) -> str:
+    """Return a sorted list of all unique label keys across all jobs.
+
+    Useful for tab-completion or discovery of available label keys.
+    """
+    keys = sorted({key for labels in index.values() for key in labels})
+    if not keys:
+        return "(no label keys defined)"
+    return "\n".join(keys)
