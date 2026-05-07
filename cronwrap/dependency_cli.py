@@ -38,7 +38,13 @@ def render_order(jobs: List[str], graph: DependencyGraph) -> str:
 
 
 def cmd_add(graph: DependencyGraph, path: Path, job: str, depends_on: str) -> str:
-    """Add a dependency edge and persist the graph."""
+    """Add a dependency edge and persist the graph.
+
+    Returns an error message string if *job* and *depends_on* are the same,
+    to prevent self-referential dependency entries.
+    """
+    if job == depends_on:
+        return f"Error: '{job}' cannot depend on itself."
     add_dependency(graph, job, depends_on)
     save_graph(path, graph)
     return f"Added: '{job}' depends on '{depends_on}'."
